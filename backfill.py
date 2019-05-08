@@ -34,8 +34,11 @@ def process_args():
     parser.add_argument('-p', '--password', metavar='MySql Password',
                         help='MySql Password', default="")
 
-    parser.add_argument('-d', '--date', metavar='date for which backfill runs',
-                        help='date for which backfill runs in yyyy-mm-dd format', default=None)
+    parser.add_argument('-from', '--fromDate', metavar='From date for which backfill runs',
+                        help='From date for which backfill runs in yyyy-mm-dd format', default=None)
+
+    parser.add_argument('-to', '--toDate', metavar='To date for which backfill runs',
+                        help='To date for which backfill runs in yyyy-mm-dd format', default=None)
 
     parser.add_argument('-bs', '--batchSize', metavar='size for MySql insert batch, defaulted to 10000',
                         help='size for MySql insert batch, defaulted to 10000', default=10000, type=int)
@@ -49,7 +52,7 @@ def backfill(date, batch_size):
 
     fee_file, tax_file, adj_file = get_files_for_date(date)
 
-    log.info("Processing {}, {}, {} with batch size {}".format(fee_file, tax_file, adj_file, batch_size))
+    log.debug("Processing {}, {}, {} with batch size {}".format(fee_file, tax_file, adj_file, batch_size))
 
     service_fee_tax_by_transaction_id_dict = map_service_fee_tax_by_transaction_id(tax_file)
     adjustments_by_order_id_dict = map_adjustments_by_order_id(adj_file)
@@ -65,7 +68,7 @@ def backfill(date, batch_size):
             time_taken = (datetime.datetime.now() - start).seconds
             log.info("Processed batch {} in {} secs".format(batch_num, time_taken))
             sleep_for = 1 if time_taken == 0 else time_taken * 2
-            log.info("sleeping for {}".format(sleep_for))
+            log.info("sleeping for {} secs".format(sleep_for))
             time.sleep(sleep_for)
             batch_num = batch_num + 1
 
@@ -157,7 +160,7 @@ def map_adjustments_by_order_id(adj_file):
 
 def insert(item_ids, row, line_item_type):
     try:
-        sql = "INSERT INTO grubhub.transaction_line_item_test (transaction_id, line_item_type, amount) " \
+        sql = "INSERT INTO grubhub.transaction_line_item (transaction_id, line_item_type, amount) " \
               "VALUES (" + row[2] + ", '" + line_item_type + "', " + row[5] + ")"
         cursor = mydb.cursor()
         cursor.execute(sql)
@@ -176,13 +179,13 @@ def insert_line_items_for_service_fee_refund(item_ids, service_fee_row, service_
         try:
             cursor = mydb.cursor()
 
-            sql1 = "INSERT INTO grubhub.transaction_line_item_test (transaction_id, line_item_type, amount) " \
+            sql1 = "INSERT INTO grubhub.transaction_line_item (transaction_id, line_item_type, amount) " \
                   "VALUES (" + adjustment_row[2] + ", 'RESTAURANT_SERVICE_FEE_C', " + service_fee_row[5] + ")"
             cursor.execute(sql1)
             item_ids.add(cursor.lastrowid)
 
             if service_fee_tax_row is not None:
-                sql2 = "INSERT INTO grubhub.transaction_line_item_test (transaction_id, line_item_type, amount) " \
+                sql2 = "INSERT INTO grubhub.transaction_line_item (transaction_id, line_item_type, amount) " \
                        "VALUES (" + adjustment_row[2] + ", 'RESTAURANT_SERVICE_FEE_TAX_C', " + service_fee_tax_row[5] + ")"
                 cursor.execute(sql2)
                 item_ids.add(cursor.lastrowid)
@@ -199,11 +202,12 @@ def create_rollback(item_ids, date, batch_num):
         writer = csv.writer(rollback_file)
 
         for item_id in item_ids:
-            delete_sql = "DELETE FROM grubhub.transaction_line_item_test WHERE transaction_line_item_id = {}".format(
+            delete_sql = "DELETE FROM grubhub.transaction_line_item WHERE transaction_line_item_id = {}".format(
                 item_id)
             writer.writerow([delete_sql])
 
     rollback_file.close()
+    log.info("Rollback file {} created".format(rollback_file.name))
 
 
 def validate_date(date):
@@ -213,7 +217,7 @@ def validate_date(date):
         for row in reader:
             if row[0] == date:
                 log.error(
-                    "Script already ran for date: {}, to re-run make sure to first rollback for this date and clear this date from status.csv file".format(
+                    "Script already executed for {}, to re-run make sure to first rollback for this date and clear this date from status.csv file".format(
                         date))
                 log.info("Rollback cmd: python3 ./rollback.py --date {}".format(date))
                 sys.exit(1)
@@ -237,8 +241,19 @@ if __name__ == '__main__':
     )
 
     log.info("MySql Connection Successful - {}".format(mydb))
+    log.info("Using batch Size {}".format(my_args.batchSize))
 
-    validate_date(my_args.date)
-    backfill(my_args.date, my_args.batchSize)
+    fromDate = datetime.datetime.strptime(my_args.fromDate, '%Y-%m-%d').date()
+    toDate = datetime.datetime.strptime(my_args.toDate, '%Y-%m-%d').date()
+
+    while fromDate <= toDate:
+        cmd = input("Do you want to continue for {} ? ".format(fromDate))
+        if cmd == 'y':
+            log.info("Processing orders for {}".format(fromDate))
+            validate_date(fromDate.strftime("%Y-%m-%d"))
+            backfill(fromDate.strftime("%Y-%m-%d"), my_args.batchSize)
+            fromDate = fromDate + datetime.timedelta(days=1)
+        else:
+            break
 
     log.info("Done Processing")
