@@ -5,6 +5,8 @@ import argparse
 import sys
 import fnmatch
 import os
+import datetime
+import time
 
 
 def setup_logger():
@@ -42,11 +44,16 @@ def rollback(date):
     rollback_files = get_files_for_date(date)
 
     for rollback_file in rollback_files:
+        start = datetime.datetime.now()
         log.info("Rolling back " + rollback_file)
         process_rollback_file(rollback_file)
         mydb.commit()
         os.remove("rollback/"+rollback_file)
+        time_taken = (datetime.datetime.now() - start).seconds
         log.info("Rollback completed, deleted file "+rollback_file)
+        sleep_for = 1 if time_taken == 0 else time_taken * 2
+        log.info("sleeping for {} secs".format(sleep_for))
+        time.sleep(sleep_for)
 
 
 def process_rollback_file(rollback_file):
